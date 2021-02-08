@@ -1,0 +1,69 @@
+---
+# tasks file for vpc-peering
+   - name: get all vpc ids in region
+     become: true
+     become_user: root
+     shell: aws ec2 describe-vpcs --query Vpcs[].VpcId --output text --profile {{ profile }} --region {{ region }} > roles/vpc-peering/files/ramavpc.txt
+
+   - name: Change file to readable format
+     become: true
+     become_user: root
+     shell: sed -i 's/\s\+/\n/g' roles/vpc-peering/files/ramavpc.txt
+
+   - name: Getting Route Table Information from Accepter AWS Account from us-east-1
+     ec2_vpc_route_table_facts:
+      region: "{{ region }}"
+      profile: "{{ profile }}"
+      filters:
+        vpc-id: "{{item}}"
+        association.main: "true"
+     register: route_tables_from_accepter
+     with_items: "{{ file_contents_lines }}"
+
+   - name: Getting Route Table Information from local AWS Account from us-east-1
+     ec2_vpc_route_table_facts:
+      region: "{{ region }}"
+      filters:
+        vpc-id: "{{ local_vpc_id }}"
+        association.main: "true"
+     register: route_tables_of_local
+
+   - name: Getting Account Number of AWS for Peering
+     ec2_vpc_net_facts:
+      region: "{{ region }}"
+      profile: "{{ profile }}"
+     register: vpc_facts
+
+   - name: Create cross account VPC peering Connection
+     ec2_vpc_peer:
+         region: "{{ region }}"
+         vpc_id: "{{ local_vpc_id }}"
+         peer_vpc_id: "{{item}}"
+         peer_owner_id: "{{ vpc_facts.vpcs.0.owner_id }}"
+         state: present
+     register: vpc_peer
+     with_items: "{{ file_contents_lines }}"
+
+   - name: print vpc_peer
+     debug:
+       msg: "{{ item.peering_id }}"
+     with_items: "{{ vpc_peer.results }}"
+
+   - name: Accept a cross account VPC peering connection request
+     ec2_vpc_peer:
+         region: "{{ region }}"
+         peering_id: "{{ item.peering_id }}"
+         state: accept
+         profile: "{{ profile }}"
+     with_items: "{{ vpc_peer.results }}"
+
+   - name: add peer connection route to route table of local vpc
+     local_action: command aws ec2 create-route --route-table-id {{ local_routetable_id }} --destination-cidr-block {{ route_tables_from_accepter.results.0.route_tables.0.routes.0.destination_cidr_block }} --vpc-peering-connection-id {{ vpc_peer.results.0.peering_id }} --region {{ region }}
+     register: peer_route_local
+     failed_when: peer_route_local.rc != 255
+
+   - name: add peer connection route to peer route table for peer connection bi-directional
+     local_action: command aws ec2 create-route --route-table-id {{ route_tables_from_accepter.results.0.route_tables.0.id }} --destination-cidr-block {{ local_dest_cidr }} --vpc-peering-connection-id {{ vpc_peer.results.0.peering_id }} --region {{ region }} --profile {{ profile }}
+     register: peer_route
+     failed_when: peer_route.rc != 255
+

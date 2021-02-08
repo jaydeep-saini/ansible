@@ -1,0 +1,8 @@
+---
+# vars file for vpc-peering
+region: us-east-1
+file_contents_lines: "{{ lookup('file', '/etc/ansible/ramavpc.txt').splitlines() }}"
+local_vpc_id: vpc-00a6893373293f49a
+local_routetable_id: rtb-0f0e9ebf37c373718
+local_dest_cidr: 10.1.0.0/16 
+profile: rama
